@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Convertisseur images → N‑bit hex + Dithering</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;margin:24px}
+    label,button{display:inline-block;margin:6px 0}
+    textarea{width:100%;height:260px;margin-top:8px;font-family:monospace;white-space:pre;overflow:auto}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .preview{border:1px solid #ddd;padding:4px;margin:4px;display:inline-block;vertical-align:top}
+    .controls{margin-top:12px}
+    small{color:#666}
+    #previews{display:flex;flex-wrap:wrap;gap:16px;margin-top:12px}
+    #result{margin-top:20px}
+    .control-group{display:flex;gap:12px;align-items:center}
+  </style>
+</head>
+<body>
+  <h2>Convertisseur images → N‑bit (hex)</h2>
+  <div>
+    <label for="file">Choisir des images :</label>
+    <input id="file" type="file" accept="image/*" multiple>
+  </div>
+  <div class="controls">
+    <div class="row">
+      <div class="control-group">
+        <label for="bitDepth">Bits par pixel :</label>
+        <select id="bitDepth">
+          <option value="1">1‑bit</option>
+          <option value="2">2‑bit</option>
+          <option value="4">4‑bit</option>
+          <option value="8">8‑bit</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label for="threshold">Seuil :</label>
+        <input id="threshold" type="range" min="0" max="255" value="128">
+        <span id="thVal">128</span>
+      </div>
+
+      <div class="control-group">
+        <label><input id="ditherEnable" type="checkbox"> Activer diffusion d'erreur</label>
+      </div>
+
+      <div class="control-group">
+        <label for="ditherAlgo">Algorithme :</label>
+        <select id="ditherAlgo">
+          <option value="floyd">Floyd–Steinberg</option>
+          <option value="atkinson">Atkinson</option>
+          <option value="bayer">Bayer (ordonné)</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label for="strength">Intensité diffusion (%):</label>
+        <input id="strength" type="range" min="0" max="200" value="100"> <span id="strVal">100%</span>
+      </div>
+
+      <div class="control-group">
+        <label for="outWidth">Largeur sortie :</label>
+        <input id="outWidth" type="number" value="128" min="8" step="1" style="width:80px">
+        <label for="outHeight">Hauteur sortie :</label>
+        <input id="outHeight" type="number" value="64" min="8" step="1" style="width:80px">
+      </div>
+
+      <div>
+        <button id="generate">Générer</button>
+        <button id="copy">Copier</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="previews"></div>
+
+  <div id="result">
+    <label for="hex">Hex N‑bit :</label>
+    <textarea id="hex" readonly placeholder="Le code hexapécimal apparaîtra ici après génération..."></textarea>
+  </div>
+
+  <canvas id="canvas" style="display:none"></canvas>
+
+  <script>
+    const fileInput = document.getElementById('file');
+    const generateBtn = document.getElementById('generate');
+    const canvas = document.getElementById('canvas');
+    const hexArea = document.getElementById('hex');
+    const thresholdRange = document.getElementById('threshold');
+    const thVal = document.getElementById('thVal');
+    const copyBtn = document.getElementById('copy');
+    const previews = document.getElementById('previews');
+    const ditherEnable = document.getElementById('ditherEnable');
+    const ditherAlgo = document.getElementById('ditherAlgo');
+    const strength = document.getElementById('strength');
+    const strVal = document.getElementById('strVal');
+    const outWidthInput = document.getElementById('outWidth');
+    const outHeightInput = document.getElementById('outHeight');
+    const bitDepthSelect = document.getElementById('bitDepth');
+
+    thresholdRange.addEventListener('input', () => thVal.textContent = thresholdRange.value);
+    strength.addEventListener('input', () => strVal.textContent = strength.value + '%');
+
+    let fileCanvases = new Map();
+
+    fileInput.addEventListener('change', () => {
+      previews.innerHTML = '';
+      fileCanvases.clear();
+      for(const f of fileInput.files){
+        const container = document.createElement('div');
+        container.className = 'preview';
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(f);
+        img.style.maxWidth = '128px';
+        img.style.maxHeight = '128px';
+        container.appendChild(img);
+
+        const outCanvas = document.createElement('canvas');
+        outCanvas.width = parseInt(outWidthInput.value);
+        outCanvas.height = parseInt(outHeightInput.value);
+        outCanvas.style.display = 'block';
+        outCanvas.style.marginTop = '4px';
+        outCanvas.style.width = outCanvas.width + 'px';
+        outCanvas.style.height = outCanvas.height + 'px';
+
+        container.appendChild(outCanvas);
+        previews.appendChild(container);
+        fileCanvases.set(f.name, outCanvas);
+      }
+    });
+
+    generateBtn.addEventListener('click', () => {
+      const files = fileInput.files;
+      if(!files || files.length === 0){ alert('Veuillez choisir au moins une image.'); return; }
+
+      let promises = [];
+      for(const f of files){
+        const outCanvas = fileCanvases.get(f.name);
+        promises.push(new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = e => {
+            const img = new Image();
+            img.onload = () => resolve(processImage(img, outCanvas));
+            img.src = e.target.result;
+          };
+          reader.readAsDataURL(f);
+        }));
+      }
+
+      Promise.all(promises).then(results => {
+        hexArea.value = results.join(',\n');
+        hexArea.scrollTop = 0;
+      });
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      try{
+        await navigator.clipboard.writeText(hexArea.value);
+        copyBtn.textContent = 'Copié!';
+        setTimeout(()=> copyBtn.textContent = 'Copier',900);
+      }catch(e){ alert('Impossible de copier: ' + e); }
+    });
+
+    const bayer8 = [0,48,12,60,3,51,15,63,32,16,44,28,35,19,47,31,8,56,4,52,11,59,7,55,40,24,36,20,43,27,39,23,2,50,14,62,1,49,13,61,34,18,46,30,33,17,45,29,10,58,6,54,9,57,5,53,42,26,38,22,41,25,37,21];
+
+    function processImage(img, outCanvas){
+      const w = parseInt(outWidthInput.value);
+      const h = parseInt(outHeightInput.value);
+      const bits = parseInt(bitDepthSelect.value);
+      const maxVal = (1 << bits) - 1;
+
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0,0,w,h);
+      ctx.drawImage(img, 0, 0, w, h);
+
+      const imageData = ctx.getImageData(0,0,w,h);
+      const data = imageData.data;
+      const threshold = parseInt(thresholdRange.value);
+      const useDither = ditherEnable.checked;
+      const algo = ditherAlgo.value;
+      const strengthFactor = parseInt(strength.value)/100;
+
+      let lum = new Float32Array(w*h);
+      for(let i=0;i<w*h;i++){
+        const r=data[i*4], g=data[i*4+1], b=data[i*4+2];
+        lum[i] = 0.299*r + 0.587*g + 0.114*b;
+      }
+
+      const bytes = [];
+      for(let y=0;y<h;y++){
+        let buffer = 0, bitsFilled = 0;
+        for(let x=0;x<w;x++){
+          const idx = y*w + x;
+          let oldVal = lum[idx];
+          let newVal;
+          if(useDither && algo==='floyd'){
+            newVal = oldVal<threshold?0:255;
+            const err = (oldVal-newVal)*strengthFactor;
+            if(x+1<w) lum[idx+1]+=err*7/16;
+            if(y+1<h){ if(x>0) lum[idx+w-1]+=err*3/16; lum[idx+w]+=err*5/16; if(x+1<w) lum[idx+w+1]+=err*1/16; }
+          } else if(useDither && algo==='atkinson'){
+            newVal = oldVal<threshold?0:255;
+            const err=(oldVal-newVal)*strengthFactor/8;
+            if(x+1<w) lum[idx+1]+=err; if(x+2<w) lum[idx+2]+=err;
+            if(y+1<h){ if(x>0) lum[idx+w-1]+=err; lum[idx+w]+=err; if(x+1<w) lum[idx+w+1]+=err; }
+            if(y+2<h) lum[idx+2*w]+=err;
+          } else if(useDither && algo==='bayer'){
+            const mx = bayer8[(y%8)*8+(x%8)];
+            const th=(mx/63)*255;
+            newVal = lum[idx]<th?0:255;
+          } else {
+            newVal = oldVal<threshold?0:255;
+          }
+
+          const val = Math.round(newVal/255*maxVal);
+          lum[idx] = Math.round(val/maxVal*255);
+
+          buffer = (buffer << bits) | val;
+          bitsFilled += bits;
+          if(bitsFilled >= 8){
+            bytes.push(buffer >> (bitsFilled - 8));
+            bitsFilled -= 8;
+            buffer &= (1 << bitsFilled)-1;
+          }
+        }
+        if(bitsFilled>0) bytes.push(buffer << (8 - bitsFilled));
+      }
+
+      const outCtx = outCanvas.getContext('2d');
+      const outImageData = outCtx.createImageData(w,h);
+      for(let i=0;i<w*h;i++){
+        const v = lum[i];
+        outImageData.data[i*4] = v;
+        outImageData.data[i*4+1] = v;
+        outImageData.data[i*4+2] = v;
+        outImageData.data[i*4+3] = 255;
+      }
+      outCtx.putImageData(outImageData,0,0);
+
+      const hexParts = bytes.map(b=>'0x'+(b&0xFF).toString(16).padStart(2,'0').toUpperCase());
+      return `{${hexParts.join(' ')}}`;
+    }
+  </script>
+</body>
+</html>
