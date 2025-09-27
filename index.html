@@ -240,8 +240,9 @@
       outCtx.putImageData(outImageData,0,0);
 
       const hexParts = bytes.map(b=>'0x'+(b&0xFF).toString(16).padStart(2,'0').toUpperCase());
-      return `{${hexParts.join(' ')}}`;
+      return `{${hexParts.join(', ')}}`;
     }
   </script>
 </body>
 </html>
+
