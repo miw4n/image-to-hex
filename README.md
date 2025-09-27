@@ -1,4 +1,4 @@
-# Convertisseur d'images → N‑bit Hex pour ESP32 / OLED
+# Convertisseur d'images → N‑bit Hex pour ESP32 ARDUINO RASPBERRY 
 
 Ce projet permet de convertir rapidement des images en code hexadécimal utilisable sur des écrans OLED ou TFT avec un ESP32 ou un Raspberry.
 
